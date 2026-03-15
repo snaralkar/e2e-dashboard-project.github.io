@@ -1,28 +1,35 @@
 """
 DataPulse -- ETL Pipeline
-========================
+=========================
 Handles: Extraction -> Validation -> Transformation -> Loading
 
-Author  : Shubham Naralkar
-Stack   : Python, Pandas, SQLAlchemy, MySQL
+Author : Shubham Naralkar
+Stack  : Python, Pandas, SQLAlchemy, MySQL
 
 Install:
-    pip install pandas numpy sqlalchemy pymysql
+    pip install pandas numpy sqlalchemy pymysql cryptography python-dotenv
 """
 
-import sys
-import io
-import logging
+import sys, io, os, logging
 import pandas as pd
 import numpy as np
 from datetime import datetime
 from pathlib import Path
+from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
-from config import DB_CONFIG
 
-# ─────────────────────────────────────────────
-# LOGGING SETUP  (Windows UTF-8 fix)
-# ─────────────────────────────────────────────
+# ── ENV ──────────────────────────────────────────────────
+load_dotenv()
+
+DB_CONFIG = {
+    "host"    : os.getenv("DB_HOST",     "localhost"),
+    "port"    : int(os.getenv("DB_PORT", "3306")),
+    "user"    : os.getenv("DB_USER",     "root"),
+    "password": os.getenv("DB_PASSWORD", "your_password"),
+    "database": os.getenv("DB_NAME",     "datapulse"),
+}
+
+# ── LOGGING (Windows UTF-8 fix) ───────────────────────────
 if hasattr(sys.stdout, "buffer"):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
@@ -36,12 +43,9 @@ logging.basicConfig(
 )
 log = logging.getLogger("DataPulse_ETL")
 
-
-# ─────────────────────────────────────────────
-# CONFIG
-# ─────────────────────────────────────────────
+# ── PIPELINE CONFIG ───────────────────────────────────────
 CONFIG = {
-    "input_file"      : "C:/Users/Shubham Naralkar/OneDrive/E2E_Project/DataPulse/sales_data.csv",
+    "input_file"      : "sales_data.csv",
     "table_name"      : "sales",
     "required_cols"   : ["order_id","customer_id","product","category",
                           "quantity","unit_price","sales","profit","date","region"],
@@ -56,7 +60,7 @@ CONFIG = {
 def extract(filepath: str) -> pd.DataFrame:
     log.info(f"[EXTRACT] Reading: {filepath}")
     if not Path(filepath).exists():
-        raise FileNotFoundError(f"Input file not found: {filepath}")
+        raise FileNotFoundError(f"File not found: {filepath}")
     df = pd.read_csv(filepath)
     log.info(f"[EXTRACT] Loaded {len(df):,} rows x {len(df.columns)} columns")
     return df
@@ -67,12 +71,11 @@ def extract(filepath: str) -> pd.DataFrame:
 # ═══════════════════════════════════════════════
 def validate(df: pd.DataFrame) -> pd.DataFrame:
     log.info("[VALIDATE] Starting data quality checks...")
-    issues = []
-    original_len = len(df)
+    issues, original_len = [], len(df)
 
-    missing_cols = [c for c in CONFIG["required_cols"] if c not in df.columns]
-    if missing_cols:
-        raise ValueError(f"Missing required columns: {missing_cols}")
+    missing = [c for c in CONFIG["required_cols"] if c not in df.columns]
+    if missing:
+        raise ValueError(f"Missing columns: {missing}")
     log.info("  [OK] All required columns present")
 
     dupes = df.duplicated(subset="order_id", keep="first")
@@ -80,36 +83,35 @@ def validate(df: pd.DataFrame) -> pd.DataFrame:
         issues.append(f"Dropped {dupes.sum()} duplicate order_ids")
         df = df[~dupes]
 
-    null_counts = df[CONFIG["required_cols"]].isnull().sum()
-    null_cols = null_counts[null_counts > 0]
+    null_cols = df[CONFIG["required_cols"]].isnull().sum()
+    null_cols = null_cols[null_cols > 0]
     if not null_cols.empty:
-        issues.append(f"Null values found: {null_cols.to_dict()}")
+        issues.append(f"Nulls found: {null_cols.to_dict()}")
         df = df.dropna(subset=CONFIG["required_cols"])
 
-    bad_rows = (df["sales"] <= 0) | (df["quantity"] <= 0) | (df["unit_price"] <= 0)
-    if bad_rows.sum():
-        issues.append(f"Dropped {bad_rows.sum()} rows with invalid numeric values")
-        df = df[~bad_rows]
+    bad = (df["sales"] <= 0) | (df["quantity"] <= 0) | (df["unit_price"] <= 0)
+    if bad.sum():
+        issues.append(f"Dropped {bad.sum()} rows with invalid numeric values")
+        df = df[~bad]
 
     bad_cat = ~df["category"].isin(CONFIG["valid_categories"])
     bad_reg = ~df["region"].isin(CONFIG["valid_regions"])
     if bad_cat.sum():
-        issues.append(f"Dropped {bad_cat.sum()} rows with unknown categories")
+        issues.append(f"Dropped {bad_cat.sum()} unknown categories")
         df = df[~bad_cat]
     if bad_reg.sum():
-        issues.append(f"Dropped {bad_reg.sum()} rows with unknown regions")
+        issues.append(f"Dropped {bad_reg.sum()} unknown regions")
         df = df[~bad_reg]
 
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     bad_dates = df["date"].isna()
     if bad_dates.sum():
-        issues.append(f"Dropped {bad_dates.sum()} rows with unparseable dates")
+        issues.append(f"Dropped {bad_dates.sum()} bad dates")
         df = df[~bad_dates]
 
-    dropped = original_len - len(df)
-    log.info(f"[VALIDATE] {len(issues)} issue(s) found, {dropped} rows dropped")
-    for issue in issues:
-        log.warning(f"  [WARN] {issue}")
+    log.info(f"[VALIDATE] {len(issues)} issue(s), {original_len - len(df)} rows dropped")
+    for i in issues:
+        log.warning(f"  [WARN] {i}")
     log.info(f"  [OK] Clean rows: {len(df):,}")
     return df
 
@@ -137,23 +139,22 @@ def transform(df: pd.DataFrame) -> pd.DataFrame:
 
     order_counts = df.groupby("customer_id")["order_id"].transform("count")
     df["customer_segment"] = pd.cut(
-        order_counts,
-        bins=[0, 3, 7, np.inf],
+        order_counts, bins=[0, 3, 7, np.inf],
         labels=["One-time", "Returning", "Loyal"]
     )
 
-    mu, sigma = df["sales"].mean(), df["sales"].std()
+    mu, sigma        = df["sales"].mean(), df["sales"].std()
     df["is_outlier"] = (df["sales"] > mu + 3 * sigma).astype(int)
-    df["year_month"]  = df["date"].dt.to_period("M").astype(str)
-    df["date"]        = df["date"].dt.strftime("%Y-%m-%d")
+    df["year_month"] = df["date"].dt.to_period("M").astype(str)
+    df["date"]       = df["date"].dt.strftime("%Y-%m-%d")
 
-    log.info("  [OK] Derived columns added: profit_margin_pct, profit_tier, customer_segment, is_outlier, year_month")
+    log.info("  [OK] Derived: profit_margin_pct, profit_tier, customer_segment, is_outlier, year_month")
     log.info(f"  [OK] Final shape: {df.shape}")
     return df
 
 
 # ═══════════════════════════════════════════════
-# STEP 4 -- LOAD  (MySQL)
+# STEP 4 -- LOAD
 # ═══════════════════════════════════════════════
 def get_engine():
     url = (
@@ -178,7 +179,6 @@ def ensure_database_exists():
 
 def load(df: pd.DataFrame, table: str) -> None:
     log.info(f"[LOAD] Connecting -> {DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['database']}")
-
     ensure_database_exists()
     engine = get_engine()
 
@@ -186,14 +186,8 @@ def load(df: pd.DataFrame, table: str) -> None:
     df["profit_tier"]      = df["profit_tier"].astype(str)
     df["customer_segment"] = df["customer_segment"].astype(str)
 
-    log.info(f"[LOAD] Writing {len(df):,} rows -> table `{table}`")
-    df.to_sql(
-        name      = table,
-        con       = engine,
-        if_exists = "replace",   # use "append" for incremental loads
-        index     = False,
-        chunksize = 500,
-    )
+    log.info(f"[LOAD] Writing {len(df):,} rows -> `{table}`")
+    df.to_sql(name=table, con=engine, if_exists="replace", index=False, chunksize=500)
 
     with engine.connect() as conn:
         count = conn.execute(text(f"SELECT COUNT(*) FROM `{table}`")).scalar()
@@ -231,12 +225,10 @@ def run_pipeline():
         final_df = transform(clean_df)
         load(final_df, CONFIG["table_name"])
         log_audit(final_df)
-        elapsed = (datetime.now() - start).total_seconds()
-        log.info(f"[DONE] Pipeline completed in {elapsed:.2f}s")
+        log.info(f"[DONE] Pipeline completed in {(datetime.now()-start).total_seconds():.2f}s")
     except Exception as e:
-        log.error(f"[FAILED] Pipeline error: {e}", exc_info=True)
+        log.error(f"[FAILED] {e}", exc_info=True)
         raise
-
 
 if __name__ == "__main__":
     run_pipeline()
