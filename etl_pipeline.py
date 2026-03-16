@@ -22,11 +22,11 @@ from sqlalchemy import create_engine, text
 load_dotenv()
 
 DB_CONFIG = {
-    "host"    : os.getenv("DB_HOST",     "localhost"),
+    "host"    : os.getenv("DB_HOST",     "sql12.freesqldatabase.com"),
     "port"    : int(os.getenv("DB_PORT", "3306")),
-    "user"    : os.getenv("DB_USER",     "root"),
-    "password": os.getenv("DB_PASSWORD", "your_password"),
-    "database": os.getenv("DB_NAME",     "datapulse"),
+    "user"    : os.getenv("DB_USER",     "sql12820146"),
+    "password": os.getenv("DB_PASSWORD", "j6Ep5EicwM"),
+    "database": os.getenv("DB_NAME",     "sql12820146"),
 }
 
 # ── LOGGING (Windows UTF-8 fix) ───────────────────────────
@@ -45,7 +45,7 @@ log = logging.getLogger("DataPulse_ETL")
 
 # ── PIPELINE CONFIG ───────────────────────────────────────
 CONFIG = {
-    "input_file"      : "sales_data.csv",
+    "input_file"      : r"C:\Users\Shubham Naralkar\OneDrive\E2E_Project\DataPulse\sales_data.csv",
     "table_name"      : "sales",
     "required_cols"   : ["order_id","customer_id","product","category",
                           "quantity","unit_price","sales","profit","date","region"],
