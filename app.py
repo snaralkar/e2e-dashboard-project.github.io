@@ -36,14 +36,29 @@ def load_data() -> pd.DataFrame:
         f"@{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['database']}"
         f"?charset=utf8mb4"
     )
-    engine = create_engine(url, echo=False)
+    engine = create_engine(url, echo=False, pool_pre_ping=True,
+                           connect_args={"connect_timeout": 10})
     with engine.connect() as conn:
         df = pd.read_sql("SELECT * FROM sales", conn)
     engine.dispose()
     df["date"] = pd.to_datetime(df["date"])
     return df
 
-df = load_data()
+try:
+    df = load_data()
+except Exception as e:
+    print(f"DB connection failed: {e}")
+    print("Loading fallback CSV data...")
+    df = pd.read_csv("sales_data.csv", parse_dates=["date"])
+    df["year"]             = df["date"].dt.year
+    df["month"]            = df["date"].dt.month
+    df["quarter"]          = df["date"].dt.quarter
+    df["month_name"]       = df["date"].dt.strftime("%b")
+    df["profit_margin_pct"]= (df["profit"] / df["sales"] * 100).round(2)
+    df["year_month"]       = df["date"].dt.to_period("M").astype(str)
+    df["is_outlier"]       = 0
+    df["profit_tier"]      = "Medium"
+    df["customer_segment"] = "Returning"
 
 ALL_YEARS    = sorted(df["year"].unique())
 ALL_CATS     = sorted(df["category"].unique())
