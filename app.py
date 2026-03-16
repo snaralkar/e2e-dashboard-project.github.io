@@ -56,7 +56,8 @@ except Exception as e:
     df["month_name"]       = df["date"].dt.strftime("%b")
     df["profit_margin_pct"]= (df["profit"] / df["sales"] * 100).round(2)
     df["year_month"]       = df["date"].dt.to_period("M").astype(str)
-    df["is_outlier"]       = 0
+    mu, sigma = df["sales"].mean(), df["sales"].std()
+    df["is_outlier"] = (df["sales"] > mu + 3 * sigma).astype(int)
     df["profit_tier"]      = "Medium"
     df["customer_segment"] = "Returning"
 
